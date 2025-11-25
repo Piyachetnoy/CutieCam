@@ -92,56 +92,141 @@ struct PhotoEditorView: View {
     // MARK: - Adjustment Controls
     private var adjustmentControls: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                // Exposure
-                AdjustmentSlider(
-                    title: "Exposure",
-                    value: $currentParameters.exposure,
-                    range: -2...2
-                ) {
-                    applyCurrentParameters()
+            VStack(spacing: 16) {
+                Text("Adjust Filter")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                
+                Divider()
+                    .background(Color.gray)
+                
+                // Basic Adjustments
+                Group {
+                    Text("BASIC")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    
+                    AdjustmentSlider(
+                        title: "露出 (Exposure)",
+                        value: $currentParameters.exposure,
+                        range: -1...1,
+                        step: 0.05
+                    ) {
+                        applyCurrentParameters()
+                    }
+                    
+                    AdjustmentSlider(
+                        title: "コントラスト (Contrast)",
+                        value: $currentParameters.contrast,
+                        range: 0.5...1.5,
+                        step: 0.05
+                    ) {
+                        applyCurrentParameters()
+                    }
+                    
+                    AdjustmentSlider(
+                        title: "彩度 (Saturation)",
+                        value: $currentParameters.saturation,
+                        range: 0...1.5,
+                        step: 0.05
+                    ) {
+                        applyCurrentParameters()
+                    }
                 }
                 
-                // Contrast
-                AdjustmentSlider(
-                    title: "Contrast",
-                    value: $currentParameters.contrast,
-                    range: 0...2
-                ) {
-                    applyCurrentParameters()
+                Divider()
+                    .background(Color.gray)
+                    .padding(.vertical, 8)
+                
+                // Film Effects
+                Group {
+                    Text("FILM EFFECTS")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    
+                    AdjustmentSlider(
+                        title: "フィルムグレイン (Grain)",
+                        value: $currentParameters.grainIntensity,
+                        range: 0...0.8,
+                        step: 0.05
+                    ) {
+                        applyCurrentParameters()
+                    }
+                    
+                    AdjustmentSlider(
+                        title: "ビネット (Vignette)",
+                        value: $currentParameters.vignette,
+                        range: 0...0.8,
+                        step: 0.05
+                    ) {
+                        applyCurrentParameters()
+                    }
+                    
+                    AdjustmentSlider(
+                        title: "フェード (Fade)",
+                        value: $currentParameters.fadeAmount,
+                        range: 0...0.5,
+                        step: 0.05
+                    ) {
+                        applyCurrentParameters()
+                    }
+                    
+                    AdjustmentSlider(
+                        title: "ハレーション (Halation)",
+                        value: $currentParameters.halation,
+                        range: 0...0.6,
+                        step: 0.05
+                    ) {
+                        applyCurrentParameters()
+                    }
                 }
                 
-                // Saturation
-                AdjustmentSlider(
-                    title: "Saturation",
-                    value: $currentParameters.saturation,
-                    range: 0...2
-                ) {
-                    applyCurrentParameters()
-                }
+                Divider()
+                    .background(Color.gray)
+                    .padding(.vertical, 8)
                 
-                // Grain
-                AdjustmentSlider(
-                    title: "Film Grain",
-                    value: $currentParameters.grainIntensity,
-                    range: 0...1
-                ) {
-                    applyCurrentParameters()
-                }
-                
-                // Vignette
-                AdjustmentSlider(
-                    title: "Vignette",
-                    value: $currentParameters.vignette,
-                    range: 0...1
-                ) {
-                    applyCurrentParameters()
+                // Advanced
+                Group {
+                    Text("ADVANCED")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    
+                    AdjustmentSlider(
+                        title: "ハイライト (Highlights)",
+                        value: $currentParameters.highlights,
+                        range: -0.5...0.5,
+                        step: 0.05
+                    ) {
+                        applyCurrentParameters()
+                    }
+                    
+                    AdjustmentSlider(
+                        title: "シャドウ (Shadows)",
+                        value: $currentParameters.shadows,
+                        range: -0.5...0.5,
+                        step: 0.05
+                    ) {
+                        applyCurrentParameters()
+                    }
+                    
+                    AdjustmentSlider(
+                        title: "色温度 (Temperature)",
+                        value: $currentParameters.temperature,
+                        range: -0.5...0.5,
+                        step: 0.05
+                    ) {
+                        applyCurrentParameters()
+                    }
                 }
             }
             .padding()
         }
-        .frame(height: 300)
-        .background(Color.gray.opacity(0.2))
+        .frame(height: 380)
+        .background(Color.black.opacity(0.8))
     }
     
     // MARK: - Action Buttons
@@ -193,9 +278,26 @@ struct PhotoEditorView: View {
         Task {
             isProcessing = true
             
-            if let filter = filter {
-                var adjustedFilter = filter
-                adjustedFilter.parameters = currentParameters
+            if let originalFilter = filter {
+                // Create a new filter with updated parameters
+                let adjustedFilter = Filter(
+                    id: originalFilter.id,
+                    name: originalFilter.name,
+                    nameLocalized: originalFilter.nameLocalized,
+                    description: originalFilter.description,
+                    thumbnailName: originalFilter.thumbnailName,
+                    creatorId: originalFilter.creatorId,
+                    creatorName: originalFilter.creatorName,
+                    price: originalFilter.price,
+                    isPremium: originalFilter.isPremium,
+                    isUserGenerated: originalFilter.isUserGenerated,
+                    downloads: originalFilter.downloads,
+                    rating: originalFilter.rating,
+                    tags: originalFilter.tags,
+                    parameters: currentParameters,
+                    aestheticStyle: originalFilter.aestheticStyle,
+                    dateCreated: originalFilter.dateCreated
+                )
                 
                 do {
                     let processed = try await filterService.applyFilter(adjustedFilter, to: image)
@@ -239,25 +341,39 @@ struct AdjustmentSlider: View {
     let title: String
     @Binding var value: Double
     let range: ClosedRange<Double>
+    let step: Double
     let onEditingChanged: () -> Void
     
+    init(title: String,
+         value: Binding<Double>,
+         range: ClosedRange<Double>,
+         step: Double = 0.01,
+         onEditingChanged: @escaping () -> Void) {
+        self.title = title
+        self._value = value
+        self.range = range
+        self.step = step
+        self.onEditingChanged = onEditingChanged
+    }
+    
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(title)
                     .foregroundColor(.white)
-                    .font(.subheadline)
+                    .font(.system(size: 13, weight: .medium))
                 
                 Spacer()
                 
                 Text(String(format: "%.2f", value))
-                    .foregroundColor(.gray)
-                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .font(.system(size: 12, weight: .bold))
+                    .monospacedDigit()
             }
             
-            Slider(value: $value, in: range)
+            Slider(value: $value, in: range, step: step)
                 .tint(.orange)
-                .onChange(of: value) { _, _ in
+                .onChange(of: value) { _ in
                     onEditingChanged()
                 }
         }

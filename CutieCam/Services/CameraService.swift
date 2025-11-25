@@ -22,13 +22,16 @@ class CameraService: NSObject, ObservableObject {
     @Published var isFlashOn = false
     @Published var cameraPosition: AVCaptureDevice.Position = .back
     
-    let session = AVCaptureSession()
+    nonisolated let session = AVCaptureSession()
     private var videoDeviceInput: AVCaptureDeviceInput?
     private let photoOutput = AVCapturePhotoOutput()
     private var sessionQueue = DispatchQueue(label: "com.cutiecam.camera.sessionqueue")
     
     // Filter processing
     private var currentFilter: Filter?
+    
+    // Keep strong reference to photo capture delegate
+    private var photoCaptureDelegate: PhotoCaptureDelegate?
     
     override init() {
         super.init()
@@ -57,23 +60,7 @@ class CameraService: NSObject, ObservableObject {
         
         let position = cameraPosition
         
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            sessionQueue.async { [weak self] in
-                guard let self = self else {
-                    continuation.resume(throwing: CameraError.sessionNotReady)
-                    return
-                }
-                
-                Task { @MainActor in
-                    do {
-                        try await self.configureCaptureSession(position: position)
-                        continuation.resume()
-                    } catch {
-                        continuation.resume(throwing: error)
-                    }
-                }
-            }
-        }
+        try await configureCaptureSession(position: position)
         
         await startSession()
     }
@@ -82,54 +69,110 @@ class CameraService: NSObject, ObservableObject {
         session.beginConfiguration()
         defer { session.commitConfiguration() }
         
+        // Remove existing inputs and outputs
+        session.inputs.forEach { session.removeInput($0) }
+        session.outputs.forEach { session.removeOutput($0) }
+        
         // Set session preset for high quality
-        session.sessionPreset = .photo
+        if session.canSetSessionPreset(.photo) {
+            session.sessionPreset = .photo
+        } else {
+            session.sessionPreset = .high
+        }
         
         // Add video input
         guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) else {
+            print("Error: Camera device not available for position: \(position)")
             throw CameraError.deviceNotAvailable
         }
         
-        let videoDeviceInput = try AVCaptureDeviceInput(device: videoDevice)
+        print("Found video device: \(videoDevice.localizedName)")
         
-        if session.canAddInput(videoDeviceInput) {
-            session.addInput(videoDeviceInput)
-            self.videoDeviceInput = videoDeviceInput
-        } else {
+        do {
+            let videoDeviceInput = try AVCaptureDeviceInput(device: videoDevice)
+            
+            if session.canAddInput(videoDeviceInput) {
+                session.addInput(videoDeviceInput)
+                self.videoDeviceInput = videoDeviceInput
+                print("Successfully added camera input")
+            } else {
+                print("Error: Cannot add camera input to session")
+                throw CameraError.inputError
+            }
+        } catch {
+            print("Error creating camera input: \(error.localizedDescription)")
             throw CameraError.inputError
         }
         
         // Add photo output
         if session.canAddOutput(photoOutput) {
             session.addOutput(photoOutput)
-            photoOutput.maxPhotoQualityPrioritization = .quality
+            print("Successfully added photo output")
+            
+            // iOS version compatibility for photo quality settings
+            if #available(iOS 17.0, *) {
+                photoOutput.maxPhotoQualityPrioritization = .quality
+            }
+            
+            // Set maximum photo dimensions for high resolution capture (iOS 16+)
+            if #available(iOS 16.0, *) {
+                // Get the device's maximum photo dimensions
+                if let dimensions = videoDevice.activeFormat.supportedMaxPhotoDimensions.first {
+                    photoOutput.maxPhotoDimensions = dimensions
+                    print("Set max photo dimensions: \(dimensions.width)x\(dimensions.height)")
+                }
+            }
+            
+            // Configure photo output settings
+            photoOutput.isHighResolutionCaptureEnabled = true
+            
         } else {
+            print("Error: Cannot add photo output to session")
             throw CameraError.outputError
         }
     }
     
     // MARK: - Session Control
     func startSession() async {
-        guard !session.isRunning else { return }
-        
-        let sessionRef = session
-        sessionQueue.async { [weak self] in
-            sessionRef.startRunning()
-            Task { @MainActor in
-                self?.isCameraReady = true
+        guard !session.isRunning else { 
+            print("Session already running")
+            await MainActor.run {
+                self.isCameraReady = true
             }
+            return 
+        }
+        
+        print("Starting camera session...")
+        
+        await withCheckedContinuation { continuation in
+            sessionQueue.async {
+                self.session.startRunning()
+                print("Camera session started: \(self.session.isRunning)")
+                continuation.resume()
+            }
+        }
+        
+        await MainActor.run {
+            self.isCameraReady = self.session.isRunning
+            print("Camera ready: \(self.isCameraReady)")
         }
     }
     
     func stopSession() async {
         guard session.isRunning else { return }
         
-        let sessionRef = session
-        sessionQueue.async { [weak self] in
-            sessionRef.stopRunning()
-            Task { @MainActor in
-                self?.isCameraReady = false
+        print("Stopping camera session...")
+        
+        await withCheckedContinuation { continuation in
+            sessionQueue.async {
+                self.session.stopRunning()
+                print("Camera session stopped")
+                continuation.resume()
             }
+        }
+        
+        await MainActor.run {
+            self.isCameraReady = false
         }
     }
     
@@ -139,22 +182,40 @@ class CameraService: NSObject, ObservableObject {
             throw CameraError.sessionNotReady
         }
         
+        guard session.isRunning else {
+            throw CameraError.sessionNotReady
+        }
+        
         currentFilter = filter
         
         let settings = AVCapturePhotoSettings()
         settings.flashMode = isFlashOn ? .on : .off
         
+        // Enable high resolution capture
+        if #available(iOS 17.0, *) {
+            settings.photoQualityPrioritization = .quality
+        }
+        
         return try await withCheckedThrowingContinuation { continuation in
-            let photoCaptureDelegate = PhotoCaptureDelegate { result in
+            // Keep strong reference to delegate
+            self.photoCaptureDelegate = PhotoCaptureDelegate { [weak self] result in
+                defer {
+                    // Clean up delegate after completion
+                    Task { @MainActor in
+                        self?.photoCaptureDelegate = nil
+                    }
+                }
                 continuation.resume(with: result)
             }
-            photoOutput.capturePhoto(with: settings, delegate: photoCaptureDelegate)
+            
+            self.photoOutput.capturePhoto(with: settings, delegate: self.photoCaptureDelegate!)
         }
     }
     
     // MARK: - Camera Controls
     func switchCamera() async throws {
-        cameraPosition = cameraPosition == .back ? .front : .back
+        let newPosition: AVCaptureDevice.Position = cameraPosition == .back ? .front : .back
+        print("Switching camera to: \(newPosition == .back ? "back" : "front")")
         
         session.beginConfiguration()
         defer { session.commitConfiguration() }
@@ -162,20 +223,51 @@ class CameraService: NSObject, ObservableObject {
         // Remove existing input
         if let currentInput = videoDeviceInput {
             session.removeInput(currentInput)
+            print("Removed current camera input")
         }
         
         // Add new input for switched camera
-        guard let newDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: cameraPosition) else {
+        guard let newDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPosition) else {
+            print("Error: Device not available for position: \(newPosition)")
+            // Try to restore previous input
+            if let oldDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: cameraPosition),
+               let oldInput = try? AVCaptureDeviceInput(device: oldDevice),
+               session.canAddInput(oldInput) {
+                session.addInput(oldInput)
+                videoDeviceInput = oldInput
+            }
             throw CameraError.deviceNotAvailable
         }
         
-        let newInput = try AVCaptureDeviceInput(device: newDevice)
-        
-        if session.canAddInput(newInput) {
-            session.addInput(newInput)
-            videoDeviceInput = newInput
-        } else {
-            throw CameraError.inputError
+        do {
+            let newInput = try AVCaptureDeviceInput(device: newDevice)
+            
+            if session.canAddInput(newInput) {
+                session.addInput(newInput)
+                videoDeviceInput = newInput
+                cameraPosition = newPosition
+                print("Successfully switched to \(newPosition == .back ? "back" : "front") camera")
+            } else {
+                print("Error: Cannot add new camera input")
+                // Try to restore previous input
+                if let oldDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: cameraPosition),
+                   let oldInput = try? AVCaptureDeviceInput(device: oldDevice),
+                   session.canAddInput(oldInput) {
+                    session.addInput(oldInput)
+                    videoDeviceInput = oldInput
+                }
+                throw CameraError.inputError
+            }
+        } catch {
+            print("Error creating new camera input: \(error.localizedDescription)")
+            // Try to restore previous input
+            if let oldDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: cameraPosition),
+               let oldInput = try? AVCaptureDeviceInput(device: oldDevice),
+               session.canAddInput(oldInput) {
+                session.addInput(oldInput)
+                videoDeviceInput = oldInput
+            }
+            throw error
         }
     }
     
@@ -210,21 +302,47 @@ private class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
     
     init(completion: @escaping (Result<UIImage, Error>) -> Void) {
         self.completion = completion
+        super.init()
+        print("PhotoCaptureDelegate initialized")
+    }
+    
+    func photoOutput(_ output: AVCapturePhotoOutput, willCapturePhotoFor resolvedSettings: AVCaptureResolvedPhotoSettings) {
+        print("Photo capture started")
     }
     
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        print("Photo processing finished")
+        
         if let error = error {
+            print("Photo capture error: \(error.localizedDescription)")
             completion(.failure(error))
             return
         }
         
-        guard let imageData = photo.fileDataRepresentation(),
-              let image = UIImage(data: imageData) else {
+        guard let imageData = photo.fileDataRepresentation() else {
+            print("Error: Failed to get image data representation")
             completion(.failure(CameraError.imageProcessingFailed))
             return
         }
         
+        print("Image data size: \(imageData.count) bytes")
+        
+        guard let image = UIImage(data: imageData) else {
+            print("Error: Failed to create UIImage from data")
+            completion(.failure(CameraError.imageProcessingFailed))
+            return
+        }
+        
+        print("Successfully created UIImage: \(image.size)")
         completion(.success(image))
+    }
+    
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
+        if let error = error {
+            print("Capture finished with error: \(error.localizedDescription)")
+        } else {
+            print("Capture finished successfully")
+        }
     }
 }
 

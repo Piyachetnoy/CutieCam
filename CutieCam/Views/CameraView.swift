@@ -16,7 +16,7 @@ struct CameraView: View {
         ZStack {
             // Camera Preview
             CameraPreviewView(session: viewModel.cameraService.session)
-                .ignoresSafeArea()
+                .ignoresSafeArea(.all, edges: .top)
             
             // Camera UI Overlay
             VStack {
@@ -34,7 +34,8 @@ struct CameraView: View {
                 // Bottom Controls
                 bottomControls
             }
-            .padding()
+            .padding(.horizontal)
+            .padding(.top)
             
             // Loading Indicator
             if viewModel.isCapturing || viewModel.filterService.isProcessing {
@@ -129,7 +130,7 @@ struct CameraView: View {
     // MARK: - Bottom Controls
     private var bottomControls: some View {
         VStack(spacing: 16) {
-        HStack(spacing: 40) {
+            HStack(spacing: 40) {
             // Gallery
             Button(action: {
                 // TODO: Open gallery
@@ -173,28 +174,27 @@ struct CameraView: View {
                     .background(Color.black.opacity(0.3))
                     .clipShape(Circle())
             }
-        }
-        .padding(.bottom, 20)
+            }
         
-        // Filter Toggle
-        Button(action: {
-            withAnimation {
-                viewModel.showingFilterSelector.toggle()
+            // Filter Toggle
+            Button(action: {
+                withAnimation {
+                    viewModel.showingFilterSelector.toggle()
+                }
+            }) {
+                HStack {
+                    Image(systemName: "camera.filters")
+                    Text(viewModel.selectedFilter?.name ?? "No Filter")
+                        .font(.system(size: 14, weight: .medium))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .background(Color.black.opacity(0.5))
+                .cornerRadius(20)
             }
-        }) {
-            HStack {
-                Image(systemName: "camera.filters")
-                Text(viewModel.selectedFilter?.name ?? "No Filter")
-                    .font(.system(size: 14, weight: .medium))
-            }
-            .foregroundColor(.white)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .background(Color.black.opacity(0.5))
-            .cornerRadius(20)
         }
-        .padding(.bottom, 10)
-        }
+        .padding(.bottom, 8)
     }
 }
 
